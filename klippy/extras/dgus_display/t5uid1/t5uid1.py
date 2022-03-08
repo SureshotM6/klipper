@@ -185,8 +185,10 @@ class T5UID1:
         return result
 
     # TODO: may still need to wait for reads?
-    def write(self, cdata):
-        return self.send(cdata)
+    # TODO: some writes need to be scheduled so they don't run ahead
+    def write(self, cdata, print_time=None):
+        reqclock = self._uart.mcu.print_time_to_clock(print_time) if print_time else 0
+        return self.send(cdata, reqclock=reqclock)
 
     def get_version(self):
         version, = lib.unpack(self.read(lib.get_version()), "uint8")
@@ -210,12 +212,12 @@ class T5UID1:
                 raise self.error("Timeout waiting for page change")
             systime = self.reactor.pause(systime + 0.050)
 
-    def play_sound(self, len_ms):
+    def play_sound(self, len_ms, print_time=None):
         cdata = lib.play_sound(len_ms)
-        self.write(cdata)
+        self.write(cdata, print_time)
 
-    def stop_sound(self):
-        self.play_sound(0)
+    def stop_sound(self, print_time=None):
+        self.play_sound(0, print_time)
 
     def get_brightness(self, bypass=False):
         if not bypass:

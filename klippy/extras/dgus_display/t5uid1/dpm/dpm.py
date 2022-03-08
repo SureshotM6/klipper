@@ -437,12 +437,22 @@ class DGUSPrinterMenu:
         if self.M117_original is not None:
             self.M117_original(gcmd)
 
+    def _m300_sync_callback(self, print_time, duration):
+        # previous command has finished computing expected print_time
+        #FIXME: keep the beep going for durations over 2.55s
+        # move that code into a lower layer though
+        # self.reactor.register_timer(self._resend_m300, self.reactor.NOW)
+        msremaining = int(duration * 1000)
+        self.t5uid1.play_sound(min(msremaining, 2550), print_time)
+
     def cmd_M300(self, gcmd):
-        slen = gcmd.get_int("P", 1, minval=1, maxval=255 * 10)
-        try:
-            self.t5uid1.play_sound(slen)
-        except self.t5uid1.error as e:
-            raise gcmd.error(str(e))
+        duration = gcmd.get_int("P", 100) / 1000.
+
+        # get this into the command queue so it doesn't play too early
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.register_lookahead_callback(
+            lambda print_time: self._m300_sync_callback(print_time, duration))
+
         if self.M300_original is not None:
             self.M300_original(gcmd)
 
