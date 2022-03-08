@@ -110,62 +110,6 @@ class T5UID1Debug:
         except self.t5uid1.error as e:
             raise gcmd.error(str(e))
 
-    cmd_DGUS_ENABLE_CONTROL_help = "Enable a touch control"
-    def cmd_DGUS_ENABLE_CONTROL(self, gcmd):
-        page = gcmd.get("PAGE", minval=0, maxval=0xff,
-                        parser=lambda x: int(x, 0))
-        control_type = gcmd.get("TYPE", minval=0, maxval=0x7f,
-                                parser=lambda x: int(x, 0))
-        index = gcmd.get("INDEX", minval=0, maxval=0xff,
-                         parser=lambda x: int(x, 0))
-        try:
-            self.t5uid1.enable_control(page, control_type, index)
-        except self.t5uid1.error as e:
-            raise gcmd.error(str(e))
-
-    cmd_DGUS_DISABLE_CONTROL_help = "Disable a touch control"
-    def cmd_DGUS_DISABLE_CONTROL(self, gcmd):
-        page = gcmd.get("PAGE", minval=0, maxval=0xff,
-                        parser=lambda x: int(x, 0))
-        control_type = gcmd.get("TYPE", minval=0, maxval=0x7f,
-                                parser=lambda x: int(x, 0))
-        index = gcmd.get("INDEX", minval=0, maxval=0xff,
-                         parser=lambda x: int(x, 0))
-        try:
-            self.t5uid1.disable_control(page, control_type, index)
-        except self.t5uid1.error as e:
-            raise gcmd.error(str(e))
-
-    cmd_DGUS_READ_CONTROL_help = "Read a touch control's data into memory"
-    def cmd_DGUS_READ_CONTROL(self, gcmd):
-        page = gcmd.get("PAGE", minval=0, maxval=0xff,
-                        parser=lambda x: int(x, 0))
-        control_type = gcmd.get("TYPE", minval=0, maxval=0x7f,
-                                parser=lambda x: int(x, 0))
-        index = gcmd.get("INDEX", minval=0, maxval=0xff,
-                         parser=lambda x: int(x, 0))
-        try:
-            self.t5uid1.read_control(page, control_type, index)
-        except self.t5uid1.error as e:
-            raise gcmd.error(str(e))
-
-    cmd_DGUS_WRITE_CONTROL_help = "Write a touch control's data from memory"
-    def cmd_DGUS_WRITE_CONTROL(self, gcmd):
-        page = gcmd.get("PAGE", minval=0, maxval=0xff,
-                        parser=lambda x: int(x, 0))
-        control_type = gcmd.get("TYPE", minval=0, maxval=0x7f,
-                                parser=lambda x: int(x, 0))
-        index = gcmd.get("INDEX", minval=0, maxval=0xff,
-                         parser=lambda x: int(x, 0))
-        data = gcmd.get("DATA", default=[],
-                        parser=lambda x: bytearray(codecs.decode(x, "hex")))
-        if len(data) > 64 or len(data) % 2 != 0:
-            raise gcmd.error("Invalid DATA parameter")
-        try:
-            self.t5uid1.write_control(page, control_type, index, data)
-        except self.t5uid1.error as e:
-            raise gcmd.error(str(e))
-
     cmd_DGUS_READ_NOR_help = "Read NOR data into memory"
     def cmd_DGUS_READ_NOR(self, gcmd):
         nor_addr = gcmd.get("NOR_ADDR", minval=0, maxval=0x27fff,

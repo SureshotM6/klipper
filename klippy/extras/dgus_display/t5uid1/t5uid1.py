@@ -44,7 +44,6 @@ class T5UID1:
         self._lock = threading.Lock()
         self._completion = (None, None)
 
-        self._volume = config.getint("volume", 75, minval=0, maxval=100)
         self._brightness = config.getint("brightness", 100, minval=0,
                                          maxval=100)
 
@@ -71,11 +70,13 @@ class T5UID1:
         return max(omin, min(result, omax))
 
     def _handle_ready(self):
-        self.set_volume(self._volume, force=True, wait=False)
-        self.set_brightness(self._brightness, force=True, wait=False)
+        self.play_sound(1000)
+        logging.info("LCD version: %s", self.get_version())
+        self.set_brightness(self._brightness, force=True)
 
     def send(self, data, minclock=0, reqclock=0):
         try:
+            logging.debug("UART TX[%u]: %s", len(data), data.hex())
             self._uart.uart_send(data, minclock=minclock, reqclock=reqclock)
         except ValueError as e:
             raise self.error(str(e))
@@ -95,44 +96,55 @@ class T5UID1:
         return True, response_len
 
     def _process_command(self, command, data):
-        if command == 0x82:
-            if len(data) != 2:
-                return
-            if data[0] == 0x4f and data[1] == 0x4b:
-                with self._lock:
-                    caddr, completion = self._completion
-                    if caddr is None and completion is not None:
-                        self._completion = (None, None)
-                        self.reactor.async_complete(completion, True)
-        elif command == 0x83:
+        if command == lib.Command.RAM_R:
+            # also received for async VP updates
+            # addr[2] mlen msg[]
             dlen = len(data)
             if dlen < 3:
-                self._buffer = bytearray()
                 logging.warn("T5UID1: Invalid message")
                 return
             try:
                 addr, mlen = lib.unpack(data[:3], "uint16", "uint8")
             except lib.error:
-                self._buffer = bytearray()
                 logging.warn("T5UID1: Invalid message")
                 return
             mlen *= 2
             if dlen < mlen + 3:
-                self._buffer = bytearray()
                 logging.warn("T5UID1: Invalid message")
                 return
             with self._lock:
-                caddr, completion = self._completion
-                if caddr == addr and completion is not None:
+                cdata, completion = self._completion
+                if cdata is not None and cdata[4:7] == data[:3]:
                     self._completion = (None, None)
                     self.reactor.async_complete(completion, data[3:mlen + 3])
             self.reactor.register_async_callback(
                 (lambda e, s=self, a=addr, d=data[3:mlen + 3]:
                  s.impl.receive(a, d)))
+        elif command == lib.Command.REG_R:
+            # addr mlen msg[]
+            dlen = len(data)
+            if dlen < 2:
+                logging.warn("T5UID1: Invalid message")
+                return
+            try:
+                addr, mlen = lib.unpack(data[:2], "uint8", "uint8")
+            except lib.error:
+                logging.warn("T5UID1: Invalid message")
+                return
+            if dlen != mlen + 2:
+                logging.warn("T5UID1: Invalid message")
+                return
+            with self._lock:
+                cdata, completion = self._completion
+                if cdata[4:6] == data[:2] and completion is not None:
+                    self._completion = (None, None)
+                    self.reactor.async_complete(completion, data[2:])
         else:
-            logging.info("T5UID1: Unknown command: 0x%02x" % command)
+            logging.error("T5UID1: Unknown Rx command: 0x%02x: %s", command, data.hex())
 
     def process(self, data):
+        logging.debug("UART RX[%u]: %s", len(data), data.hex())
+
         if len(data) < 1:
             self._buffer = bytearray()
             logging.warn("T5UID1: Serial RX overflow")
@@ -148,12 +160,7 @@ class T5UID1:
             else:
                 break
 
-    def read(self, address, wlen=None):
-        if type(address) is tuple:
-            wlen = address[1]
-            address = address[0]
-        cdata = lib.read(address, wlen)
-        dlen = wlen * 2
+    def read(self, cdata):
         while True:
             if self.printer.is_shutdown():
                 raise self.error("Printer is shutdown")
@@ -161,7 +168,7 @@ class T5UID1:
                 completion = self._completion[1]
                 if completion is None:
                     completion = self.reactor.completion()
-                    self._completion = (address, completion)
+                    self._completion = (cdata, completion)
                     break
             completion.wait()
         systime = self.reactor.monotonic()
@@ -175,86 +182,40 @@ class T5UID1:
                 self._completion = (None, None)
         if type(result) is not bytearray:
             raise self.error("Timeout waiting for response")
-        if len(result) != dlen:
-            raise self.error("Invalid response")
         return result
 
-    def write(self, address, data=None, wait=True):
-        if type(address) is tuple:
-            data = address[1]
-            address = address[0]
-        cdata = lib.write(address, data)
-        if not wait:
-            return self.send(cdata)
-        while True:
-            if self.printer.is_shutdown():
-                raise self.error("Printer is shutdown")
-            with self._lock:
-                completion = self._completion[1]
-                if completion is None:
-                    completion = self.reactor.completion()
-                    self._completion = (None, completion)
-                    break
-            completion.wait()
-        systime = self.reactor.monotonic()
-        print_time = self._uart.mcu.estimated_print_time(systime) + 0.100
-        reqclock = self._uart.mcu.print_time_to_clock(print_time)
-        self.send(cdata, reqclock=reqclock)
-        result = completion.wait(systime + RW_TIMEOUT)
-        completion.complete(None)
-        with self._lock:
-            if self._completion[1] == completion:
-                self._completion = (None, None)
-        if result != True:
-            raise self.error("Timeout waiting for write acknowledgement")
+    # TODO: may still need to wait for reads?
+    def write(self, cdata):
+        return self.send(cdata)
 
-    def get_versions(self):
-        return lib.unpack(self.read(lib.get_versions()), "uint8", "uint8")
+    def get_version(self):
+        version, = lib.unpack(self.read(lib.get_version()), "uint8")
+        return (version >> 4, version & 0xf)
 
     def get_page(self):
-        _, page = lib.unpack(self.read(lib.get_page()), "uint8", "uint8")
+        page, = lib.unpack(self.read(lib.get_page()), "uint16")
         return page
 
     def set_page(self, page, wait=True):
-        address, cdata = lib.set_page(page)
-        self.write(address, cdata, wait=wait)
+        cdata = lib.set_page(page)
+        self.write(cdata)
         if not wait:
             return
         systime = self.reactor.monotonic()
         timeout = systime + COMMAND_TIMEOUT
         while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint8")
-            if flag != 0x5a:
+            if page == self.get_page():
                 return
             if systime > timeout:
-                raise self.error("Timeout waiting for acknowledgement")
+                raise self.error("Timeout waiting for page change")
             systime = self.reactor.pause(systime + 0.050)
 
-    def play_sound(self, start, slen=1, volume=-1, wait=True):
-        if volume < 0:
-            volume = self._volume
-        volume = self.map_range(volume, 0, 100, 0, 255)
-        address, cdata = lib.play_sound(start, slen, volume)
-        self.write(address, cdata, wait=wait)
+    def play_sound(self, len_ms):
+        cdata = lib.play_sound(len_ms)
+        self.write(cdata)
 
     def stop_sound(self):
-        self.play_sound(0, 0)
-
-    def get_volume(self, bypass=False):
-        if not bypass:
-            return self._volume
-        volume, = lib.unpack(self.read(lib.get_volume()), "uint8")
-        return self.map_range(volume, 0, 255, 0, 100)
-
-    def set_volume(self, volume, save=False, force=False, wait=True):
-        if not force and volume == self._volume:
-            return
-        address, cdata = lib.set_volume(self.map_range(volume, 0, 100, 0, 255))
-        self.write(address, cdata, wait=wait)
-        if save:
-            self._volume = volume
-            configfile = self.printer.lookup_object("configfile")
-            configfile.set(self.config_name, "volume", volume)
+        self.play_sound(0)
 
     def get_brightness(self, bypass=False):
         if not bypass:
@@ -262,75 +223,23 @@ class T5UID1:
         brightness, = lib.unpack(self.read(lib.get_brightness()), "uint8")
         return brightness
 
-    def set_brightness(self, brightness, save=False, force=False, wait=True):
+    def set_brightness(self, brightness, save=False, force=False):
         if not force and brightness == self._brightness:
             return
-        address, cdata = lib.set_brightness(brightness)
-        self.write(address, cdata, wait=wait)
+        cdata = lib.set_brightness(brightness)
+        self.write(cdata)
         if save:
             self._brightness = brightness
             configfile = self.printer.lookup_object("configfile")
             configfile.set(self.config_name, "brightness", brightness)
 
-    def enable_control(self, page, control_type, index):
-        address, cdata = lib.enable_control(page, control_type, index)
-        self.write(address, cdata)
-        systime = self.reactor.monotonic()
-        timeout = systime + COMMAND_TIMEOUT
-        while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint16")
-            if flag != 0x5aa5:
-                return
-            if systime > timeout:
-                raise self.error("Timeout waiting for acknowledgement")
-            systime = self.reactor.pause(systime + 0.050)
-
-    def disable_control(self, page, control_type, index):
-        address, cdata = lib.disable_control(page, control_type, index)
-        self.write(address, cdata)
-        systime = self.reactor.monotonic()
-        timeout = systime + COMMAND_TIMEOUT
-        while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint16")
-            if flag != 0x5aa5:
-                return
-            if systime > timeout:
-                raise self.error("Timeout waiting for acknowledgement")
-            systime = self.reactor.pause(systime + 0.050)
-
-    def read_control(self, page, control_type, index):
-        address, cdata = lib.read_control(page, control_type, index)
-        self.write(address, cdata)
-        systime = self.reactor.monotonic()
-        timeout = systime + COMMAND_TIMEOUT
-        while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint16")
-            if flag != 0x5aa5:
-                return
-            if systime > timeout:
-                raise self.error("Timeout waiting for acknowledgement")
-            systime = self.reactor.pause(systime + 0.050)
-
-    def write_control(self, page, control_type, index, content=None):
-        address, cdata = lib.write_control(page, control_type, index, content)
-        self.write(address, cdata)
-        systime = self.reactor.monotonic()
-        timeout = systime + COMMAND_TIMEOUT
-        while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint16")
-            if flag != 0x5aa5:
-                return
-            if systime > timeout:
-                raise self.error("Timeout waiting for acknowledgement")
-            systime = self.reactor.pause(systime + 0.050)
-
     def read_nor(self, nor_address, address, wlen):
-        address, cdata = lib.read_nor(nor_address, address, wlen)
-        self.write(address, cdata)
+        cdata = lib.read_nor(nor_address, address, wlen)
+        self.write(cdata)
         systime = self.reactor.monotonic()
         timeout = systime + COMMAND_TIMEOUT
         while not self.printer.is_shutdown():
-            flag, = lib.unpack(self.read(address, 1), "uint8")
+            flag, = lib.unpack(self.read(cdata), "uint8")
             if flag != 0x5a:
                 return
             if systime > timeout:
@@ -338,8 +247,8 @@ class T5UID1:
             systime = self.reactor.pause(systime + 0.050)
 
     def register_base_commands(self, display):
-        cmds = ["DGUS_PLAY_SOUND", "DGUS_STOP_SOUND", "DGUS_GET_VOLUME",
-                "DGUS_SET_VOLUME", "DGUS_GET_BRIGHTNESS", "DGUS_SET_BRIGHTNESS"]
+        cmds = ["DGUS_PLAY_SOUND", "DGUS_STOP_SOUND",
+                "DGUS_GET_BRIGHTNESS", "DGUS_SET_BRIGHTNESS"]
         gcode = self.printer.lookup_object("gcode")
         for cmd in cmds:
             gcode.register_mux_command(
@@ -348,11 +257,9 @@ class T5UID1:
 
     cmd_DGUS_PLAY_SOUND_help = "Play a sound"
     def cmd_DGUS_PLAY_SOUND(self, gcmd):
-        start = gcmd.get_int("START", minval=0, maxval=255)
-        slen = gcmd.get_int("LEN", default=1, minval=0, maxval=255)
-        volume = gcmd.get_int("VOLUME", default=-1, minval=0, maxval=100)
+        slen = gcmd.get_int("LEN", default=1, minval=0, maxval=255*10)
         try:
-            self.play_sound(start, slen, volume)
+            self.play_sound(slen)
         except self.error as e:
             raise gcmd.error(str(e))
 
@@ -360,23 +267,6 @@ class T5UID1:
     def cmd_DGUS_STOP_SOUND(self, gcmd):
         try:
             self.stop_sound()
-        except self.error as e:
-            raise gcmd.error(str(e))
-
-    cmd_DGUS_GET_VOLUME_help = "Get the volume"
-    def cmd_DGUS_GET_VOLUME(self, gcmd):
-        try:
-            volume = self.get_volume()
-        except self.error as e:
-            raise gcmd.error(str(e))
-        gcmd.respond_info("Volume: %d%%" % volume)
-
-    cmd_DGUS_SET_VOLUME_help = "Set the volume"
-    def cmd_DGUS_SET_VOLUME(self, gcmd):
-        volume = gcmd.get_int("VOLUME", minval=0, maxval=100)
-        save = gcmd.get_int("SAVE", 0)
-        try:
-            self.set_volume(volume, save=save)
         except self.error as e:
             raise gcmd.error(str(e))
 

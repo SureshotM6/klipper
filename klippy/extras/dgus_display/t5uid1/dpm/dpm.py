@@ -7,12 +7,6 @@ import os, re, ast, logging, threading
 from . import menu as m_menu
 from .. import lib, control as m_control, page as m_page
 
-GUI_MIN_VERSION = 0x30
-OS_MIN_VERSION = 0x21
-DPM_MIN_VERSION_MAJ = 1
-DPM_MIN_VERSION_MIN = 0
-DPM_MIN_VERSION_PAT = 0
-
 BOOT_TIME = 1.500
 UPDATE_TIME = 1.000
 UPDATE_MIN_TIME = 0.100
@@ -129,13 +123,13 @@ class DGUSPrinterMenu:
         dcs = self.pages["error"].display
         text = config.get("shutdown_text", "Printer is shutdown!")
 
-        msg_line1 = lib.write(dcs["line1"].set_value("", update=False))
-        msg_line2 = lib.write(dcs["line2"].set_value(text, update=False))
-        msg_line3 = lib.write(dcs["line3"].set_value("", update=False))
-        msg_line4 = lib.write(dcs["line4"].set_value("", update=False))
+        msg_line1 = dcs["line1"].set_value("", update=False)
+        msg_line2 = dcs["line2"].set_value(text, update=False)
+        msg_line3 = dcs["line3"].set_value("", update=False)
+        msg_line4 = dcs["line4"].set_value("", update=False)
 
-        msg_page = lib.set_page(3, build=True)
-        msg_sound = lib.play_sound(3, build=True)
+        msg_page = lib.set_page(3)
+        msg_sound = lib.play_sound()
 
         return (msg_line1 + msg_line2 + msg_line3 + msg_line4
                 + msg_page + msg_sound)
@@ -178,6 +172,7 @@ class DGUSPrinterMenu:
 
     receive_lock = threading.Lock()
     def receive(self, address, data):
+        logging.debug("DPM: Rx *%04x = %s", address, data.hex())
         if not self.receive_lock.acquire(False):
             return
         try:
@@ -186,6 +181,7 @@ class DGUSPrinterMenu:
                 return
             for name, control in self.pages[menu.page].touch.items():
                 if control.vp == address:
+                    logging.debug("DPM: rx update %s : %s", menu.name, name)
                     try:
                         cdata = control.receive(data)
                     except control.error as e:
@@ -217,39 +213,15 @@ class DGUSPrinterMenu:
 
         try:
             self.set_page("boot")
-        except self.t5uid1.error:
-            logging.warn("DPM: Initialization failed")
+        except self.t5uid1.error as e:
+            logging.warn("DPM: Initialization failed: %s", str(e))
             self.set_page("core_update", wait=False)
-            self.t5uid1.play_sound(3, wait=False)
+            self.t5uid1.play_sound()
             return
 
-        self.gui_version, self.os_version = self.t5uid1.get_versions()
+        self.os_version = self.t5uid1.get_version()
 
-        if (self.gui_version < GUI_MIN_VERSION
-            or self.os_version < OS_MIN_VERSION):
-            logging.warn("DPM: Core firmware is outdated")
-            self.set_page("core_update", wait=False)
-            self.t5uid1.play_sound(3, wait=False)
-            return
-
-        self.t5uid1.read_nor(0x00, 0x1000, 4)
-        version = self.t5uid1.read(0x1000, 3)
-        self.version_maj = (version[0] << 8) | version[1]
-        self.version_min = (version[2] << 8) | version[3]
-        self.version_pat = (version[4] << 8) | version[5]
-
-        if (self.version_maj < DPM_MIN_VERSION_MAJ
-            or (self.version_maj == DPM_MIN_VERSION_MAJ
-                and self.version_min < DPM_MIN_VERSION_MIN)
-            or (self.version_maj == DPM_MIN_VERSION_MAJ
-                and self.version_min == DPM_MIN_VERSION_MIN
-                and self.version_pat < DPM_MIN_VERSION_PAT)):
-            logging.warn("DPM: Firmware is outdated")
-            self.set_page("update", wait=False)
-            self.t5uid1.play_sound(3, wait=False)
-            return
-
-        self.t5uid1.play_sound(1)
+        self.t5uid1.play_sound(10)
 
         ready_at = self.reactor.monotonic() + BOOT_TIME
         self.reactor.register_callback(self.ready_cb, ready_at)
@@ -390,27 +362,6 @@ class DGUSPrinterMenu:
         if content is not None:
             self.t5uid1.write(content)
 
-    def update_touch_control(self, page_name, name, *args, **kwargs):
-        if page_name not in self.pages:
-            raise self.printer.command_error("Invalid page")
-        page = self.pages[page_name]
-        control = page.touch.get(name, None)
-        if control is None:
-            raise self.printer.command_error("Invalid control")
-        update = getattr(control, "update", None)
-        control_type = getattr(control, "control_type", None)
-        index = getattr(control, "index", None)
-        if not callable(update) or control_type is None or index is None:
-            raise self.printer.command_error("'%s' cannot be updated"
-                                             % (type(control).__name__))
-        contents = update(*args, **kwargs)
-        if len(contents) < 1:
-            return
-        self.t5uid1.read_control(page.id, control_type, index)
-        for content in contents:
-            self.t5uid1.write(content)
-        self.t5uid1.write_control(page.id, control_type, index)
-
     def set_message(self, message):
         if not self.ready:
             return
@@ -487,13 +438,9 @@ class DGUSPrinterMenu:
             self.M117_original(gcmd)
 
     def cmd_M300(self, gcmd):
-        start = gcmd.get_int("S", 3)
-        slen = gcmd.get_int("P", 1, minval=1, maxval=255)
-        volume = gcmd.get_int("V", -1, minval=0, maxval=100)
-        if start < 0 or start > 255:
-            start = 3
+        slen = gcmd.get_int("P", 1, minval=1, maxval=255 * 10)
         try:
-            self.t5uid1.play_sound(start, slen, volume)
+            self.t5uid1.play_sound(slen)
         except self.t5uid1.error as e:
             raise gcmd.error(str(e))
         if self.M300_original is not None:

@@ -4,6 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import codecs
+import logging
 from . import lib
 
 class ControlError(Exception):
@@ -53,7 +54,7 @@ class DisplayControl(object):
             self.page = None
             self.name = name_parts[1]
 
-        self.vp = config_getint(config, "vp", minval=0, maxval=0xffff)
+        self.vp = config_getint(config, "vp", minval=0, maxval=lib.MAX_RAM_ADDR)
         if data_type is None:
             self.data_type = config.get("data_type")
             if self.data_type not in lib.TYPES:
@@ -93,21 +94,25 @@ class DisplayControl(object):
             end -= 2
         return (start // 2, new_value[start:end])
 
-    def set_value(self, value, update=True):
-        value = self.transform(value)
+    def set_value(self, value, update=True, **kwargs):
+        value = self.transform(value, **kwargs)
         new_data = self.format(value)
+        logging.debug("Update %s to %s", str(self), bytes(new_data))
         if not update:
-            return (self.vp, new_data)
+            return lib.write_word(self.vp, new_data)
         if self.value == value:
             return None
         old_value = self.value
         self.value = value
         if old_value is None:
-            return (self.vp, new_data)
+            return lib.write_word(self.vp, new_data)
         offset, data = self.diff(self.format(old_value), new_data)
         if len(data) < 1:
             return None
-        return (self.vp + offset, data)
+        return lib.write_word(self.vp + offset, data)
+
+    def __str__(self):
+        return "{}::{} ({})".format(self.page or "(none)", self.name, type(self).__name__)
 
 class DC_VariableIcon(DisplayControl):
     def __init__(self, config):
@@ -213,22 +218,6 @@ class DC_Text(DisplayControl):
             start += 2
         return (start // 2, new_value[start:])
 
-    def set_value(self, value, alignment=None, pad=None, update=True):
-        value = self.transform(value, alignment, pad)
-        new_data = self.format(value)
-        if not update:
-            return (self.vp, new_data)
-        if self.value == value:
-            return None
-        old_value = self.value
-        self.value = value
-        if old_value is None:
-            return (self.vp, new_data)
-        offset, data = self.diff(self.format(old_value), new_data)
-        if len(data) < 1:
-            return None
-        return (self.vp + offset, data)
-
     def set_length(self, length):
         if length < 1:
             raise self.error("Invalid length")
@@ -266,7 +255,7 @@ class TouchControl(object):
             self.page = None
             self.name = name_parts[1]
 
-        self.vp = config_getint(config, "vp", minval=0, maxval=0xffff)
+        self.vp = config_getint(config, "vp", minval=0, maxval=lib.MAX_RAM_ADDR)
         if data_type is None:
             self.data_type = config.get("data_type")
             if self.data_type not in lib.TYPES:
@@ -325,17 +314,6 @@ class TC_DataInput(TouchControl):
         if negative:
             return -result
         return result
-
-    def update(self, digits, decimals):
-        if digits <= 0 or decimals < 0 or digits + decimals > 20:
-            raise self.error("Invalid digits/decimals")
-        if digits == self.digits[0] and decimals == self.decimals[0]:
-            return []
-        cdata = lib.pack("uint8", digits,
-                         "uint8", decimals)
-        self.digits[0] = digits
-        self.decimals[0] = decimals
-        return [ (0xbe, cdata) ]
 
 class TC_Slider(TouchControl):
     control_type = 0x03
@@ -398,21 +376,6 @@ class TC_TextInput(TouchControl):
 
     def set_value(self, value, update=True):
         return self.display.set_value(value, update=update)
-
-    def update(self, length):
-        if length < 1:
-            raise self.error("Invalid length")
-        if length == self.length[0]:
-            return []
-        padded = length
-        if padded % 2 != 0:
-            padded += 1
-        cdata = lib.pack("uint8", 0xfe,
-                         "uint16", self.vp,
-                         "uint8", padded // 2)
-        self.length[0] = length
-        self.display.set_length(length)
-        return [ (0xbc, cdata) ]
 
 TOUCH_CONTROL_TYPES = {
     "data_input": TC_DataInput,

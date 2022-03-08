@@ -113,7 +113,6 @@ class Menu(object):
         self.page = page
 
         self.base_context = {
-            "get_volume": self.get_volume,
             "get_brightness": self.get_brightness,
             "format_duration": self.format_duration,
             "wrap_text": self.wrap_text,
@@ -124,7 +123,6 @@ class Menu(object):
         self.full_context = {
             "play_sound": self.play_sound,
             "stop_sound": self.stop_sound,
-            "set_volume": self.set_volume,
             "set_brightness": self.set_brightness,
             "request_update": self.request_update,
             "set_menu": self.set_menu,
@@ -232,17 +230,11 @@ class Menu(object):
         self.context = self.gcode_macro.create_template_context()
         self.context.update(self.base_context)
 
-    def play_sound(self, start, slen=1, volume=-1):
-        self.dpm.t5uid1.play_sound(start, slen, volume)
+    def play_sound(self, slen=100):
+        self.dpm.t5uid1.play_sound(slen)
 
     def stop_sound(self):
         self.dpm.t5uid1.stop_sound()
-
-    def get_volume(self):
-        return self.dpm.t5uid1.get_volume()
-
-    def set_volume(self, volume, save=False):
-        self.dpm.t5uid1.set_volume(volume, save=save)
 
     def get_brightness(self):
         return self.dpm.t5uid1.get_brightness()
@@ -256,7 +248,7 @@ class Menu(object):
     def set_menu(self, name, silent=False, **kwargs):
         success = self.dpm.set_menu(name, **kwargs)
         if success and not silent:
-            self.play_sound(2)
+            self.play_sound()
         return success
 
     def go_back(self, force=False, silent=False):
@@ -348,11 +340,6 @@ class Menu(object):
         if self.page is None:
             raise self.error("No page")
         self.dpm.set_touch_control(self.page, name, *args, **kwargs)
-
-    def update_touch_control(self, name, *args, **kwargs):
-        if self.page is None:
-            raise self.error("No page")
-        self.dpm.update_touch_control(self.page, name, *args, **kwargs)
 
     def get_children(self):
         return self.dpm.get_menu_children(self.name)
@@ -715,7 +702,7 @@ class MenuVSDList(MenuList):
 
     def print_file(self, filename):
         self.run_script("M23 %s\nDGUS_REQUEST_UPDATE" % filename)
-        self.play_sound(2)
+        self.play_sound()
 
     def run_setup(self, params):
         if self.virtual_sdcard is None:
@@ -790,7 +777,7 @@ class MenuText(Menu):
             return False
         if self.button_action_tmpl is not None:
             self.button_action_tmpl.run_script(self.get_context(params))
-        self.play_sound(2)
+        self.play_sound()
         return True
 
     def run_receive(self, name, data, params):
@@ -950,9 +937,6 @@ class MenuNumberInput(Menu):
         if self.button_text is not None:
             self.set_display_control("button_text", self.button_text)
         self.update_steps()
-        self.update_touch_control("input",
-                                  digits=self.digits,
-                                  decimals=self.decimals)
         return True
 
     def handle_input(self, data, params):
@@ -1096,7 +1080,6 @@ class MenuTextInput(Menu):
         self.set_display_control("field_title", self.field_title)
         if self.button_text is not None:
             self.set_display_control("button_text", self.button_text)
-        self.update_touch_control("input", length=self.max_length)
         return True
 
     def handle_input(self, data, params):
