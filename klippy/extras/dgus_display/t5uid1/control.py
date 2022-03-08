@@ -289,31 +289,12 @@ class TC_DataInput(TouchControl):
             raise config.error(
                 "Option 'data_type' in section '%s' is not valid"
                 % config.get_name())
-        digits = config.getint("digits", 20, minval=1, maxval=20)
-        decimals = config.getint("decimals", 0, minval=0, maxval=19)
-        if digits + decimals > 20:
-            raise config.error(
-                "Option 'decimals' in section '%s' is not valid"
-                % config.get_name())
-        self.digits = [None, digits]
-        self.decimals = [None, decimals]
 
     def parse(self, data):
-        digits = self.digits[0]
-        if digits is None:
-            digits = self.digits[1]
-        decimals = self.decimals[0]
-        if decimals is None:
-            decimals = self.decimals[1]
-        max_len = digits + decimals
+        decimals = 3 # fixed in LCD resources
         value = super(TC_DataInput, self).parse(data)
-        negative = (value < 0)
-        result = int(str(abs(value))[-max_len:])
-        if decimals > 0:
-            result = float(result) / 10 ** decimals
-        if negative:
-            return -result
-        return result
+        value = float(value) / 10 ** decimals
+        return value
 
 class TC_Slider(TouchControl):
     control_type = 0x03

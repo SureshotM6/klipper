@@ -31,7 +31,6 @@ TYPES = {
     "uint16": "H",
     "int32": "i",
     "uint32": "I",
-    "int64": "q"
 }
 
 class error(Exception):

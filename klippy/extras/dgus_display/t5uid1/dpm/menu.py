@@ -816,7 +816,7 @@ class MenuNumberInput(Menu):
 
         self.field_title = config.get("field_title", "")
         self.field_unit = config.get("field_unit", "")
-        self.decimals = config.getint("decimals", 0, minval=0, maxval=5)
+        self.decimals = config.getint("decimals", 0, minval=0, maxval=6)
         self.digits = self.max_digits - self.decimals
         self.min_value = None
         self.max_value = None
