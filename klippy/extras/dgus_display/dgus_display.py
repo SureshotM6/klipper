@@ -7,7 +7,7 @@ from .. import bus
 from . import t5uid1
 
 DGUS_TYPE = {
-    "t5uid1": t5uid1.init
+    "dgusm": t5uid1.init,
 }
 
 class DGUSDisplay:
